@@ -11,7 +11,7 @@ export async function GET(req) {
     const value = await redis.get(key);
     return Response.json({ value: value ?? null });
   } catch (e) {
-    return Response.json({ error: "storage read failed" }, { status: 500 });
+    return Response.json({ error: `storage read failed: ${e.message || e}` }, { status: 500 });
   }
 }
 
@@ -22,7 +22,7 @@ export async function POST(req) {
     await redis.set(key, value);
     return Response.json({ ok: true });
   } catch (e) {
-    return Response.json({ error: "storage write failed" }, { status: 500 });
+    return Response.json({ error: `storage write failed: ${e.message || e}` }, { status: 500 });
   }
 }
 
@@ -34,6 +34,6 @@ export async function DELETE(req) {
     await redis.del(key);
     return Response.json({ ok: true });
   } catch (e) {
-    return Response.json({ error: "storage delete failed" }, { status: 500 });
+    return Response.json({ error: `storage delete failed: ${e.message || e}` }, { status: 500 });
   }
 }

@@ -181,7 +181,7 @@ async function gradeQuestion(partKey, promptData, answerText) {
 }
 
 /* =========================================================
-   STORAGE HELPERS — backed by /api/storage (Upstash Redis on the server).
+   STORAGE HELPERS — backed by /api/storage (Vercel Blob on the server).
    Everyone who opens this app shares the same data (2-user setup).
 
    IMPORTANT: storageGet throws on a real read failure instead of returning

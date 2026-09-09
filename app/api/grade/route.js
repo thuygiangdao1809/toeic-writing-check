@@ -7,6 +7,18 @@ const MODEL = "gemini-3.6-flash"; // Google's current free-tier Flash model as o
 // If this model ever gets retired, check https://ai.google.dev/gemini-api/docs/models
 // for the current free-tier model ID and swap it in here — nothing else needs to change.
 
+// Google's free-tier models occasionally return 503 ("high demand") or 429 (rate limit)
+// during load spikes — this is transient on Google's side, not a bug here. Retry a few
+// times with backoff before giving up, so a momentary spike doesn't force the user to
+// manually hit "chấm lại" themselves.
+const MAX_RETRIES = 2;
+const RETRY_BASE_DELAY_MS = 800;
+const RETRYABLE_STATUSES = new Set([429, 503]);
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function toGeminiParts(content) {
   return (content || []).map((block) => {
     if (block.type === "text") return { text: block.text };
@@ -29,26 +41,39 @@ export async function POST(req) {
   }
 
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`;
-
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-goog-api-key": apiKey
-    },
-    body: JSON.stringify({
-      system_instruction: { parts: [{ text: system }] },
-      contents: [{ role: "user", parts: toGeminiParts(content) }],
-      generationConfig: {
-        response_mime_type: "application/json", // asks Gemini to return valid JSON directly
-        maxOutputTokens: 1200
-      }
-    })
+  const body = JSON.stringify({
+    system_instruction: { parts: [{ text: system }] },
+    contents: [{ role: "user", parts: toGeminiParts(content) }],
+    generationConfig: {
+      response_mime_type: "application/json", // asks Gemini to return valid JSON directly
+      maxOutputTokens: 1200
+    }
   });
 
-  const data = await response.json();
-  if (!response.ok) {
-    return Response.json({ error: data?.error?.message || "Gemini API error" }, { status: response.status });
+  let response, data;
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-goog-api-key": apiKey
+      },
+      body
+    });
+    data = await response.json();
+
+    if (response.ok) break;
+
+    const shouldRetry = RETRYABLE_STATUSES.has(response.status) && attempt < MAX_RETRIES;
+    if (!shouldRetry) {
+      const friendly =
+        response.status === 503 || response.status === 429
+          ? "Model đang quá tải tạm thời (phía Google), đã thử lại vài lần nhưng chưa được. Vui lòng đợi một chút rồi bấm chấm lại."
+          : data?.error?.message || "Gemini API error";
+      return Response.json({ error: friendly }, { status: response.status });
+    }
+
+    await sleep(RETRY_BASE_DELAY_MS * Math.pow(2, attempt)); // 800ms, then 1600ms
   }
 
   const text = (data?.candidates?.[0]?.content?.parts || []).map((p) => p.text || "").join("\n");

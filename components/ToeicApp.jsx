@@ -442,7 +442,9 @@ function LibraryView({ tests, onOpenEditor, onSelectTest, onGoHistory, onDeleteT
           <div key={t.id} className="bg-white border border-slate-200 rounded-2xl p-5 flex items-center justify-between hover:border-teal-300 transition">
             <button className="text-left flex-1" onClick={() => onSelectTest(t.id)}>
               <div className="font-bold text-slate-900">{t.name}</div>
-              <div className="text-xs text-slate-400 mt-1">8 câu · tạo ngày {formatDate(t.createdAt)}</div>
+              <div className="text-xs text-slate-400 mt-1">
+                {t.counts ? t.counts.part1 + t.counts.part2 + t.counts.part3 : 8} câu · tạo ngày {formatDate(t.createdAt)}
+              </div>
             </button>
             <button onClick={() => onDeleteTest(t.id)} className="text-slate-300 hover:text-rose-500 p-2"><Trash2 size={16} /></button>
           </div>
@@ -452,85 +454,179 @@ function LibraryView({ tests, onOpenEditor, onSelectTest, onGoHistory, onDeleteT
   );
 }
 
+function ConfirmModal({ title, message, confirmLabel = "Tiếp tục lưu", cancelLabel = "Quay lại sửa", onConfirm, onCancel }) {
+  return (
+    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 px-4" onClick={onCancel}>
+      <div className="bg-white rounded-2xl p-6 max-w-sm w-full shadow-xl" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center gap-2 mb-3 text-amber-600">
+          <AlertTriangle size={20} />
+          <h3 className="font-bold text-slate-800">{title}</h3>
+        </div>
+        <p className="text-sm text-slate-500 mb-6">{message}</p>
+        <div className="flex gap-2 justify-end">
+          <button onClick={onCancel} className="px-4 py-2 rounded-full text-sm font-semibold text-slate-500 hover:bg-slate-100">{cancelLabel}</button>
+          <button onClick={onConfirm} className="px-4 py-2 rounded-full text-sm font-semibold text-white bg-teal-600 hover:bg-teal-700">{confirmLabel}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function EditorView({ onCancel, onSave }) {
+  const [scope, setScope] = useState("full"); // "full" = cả bài (3 phần), "single" = theo phần (1 phần)
+  const [singlePart, setSinglePart] = useState("part1");
   const [name, setName] = useState("");
   const [part1, setPart1] = useState(Array.from({ length: 5 }, () => ({ id: uid(), image: null, word1: "", word2: "" })));
   const [part2, setPart2] = useState(Array.from({ length: 2 }, () => ({ id: uid(), prompt: "" })));
   const [part3, setPart3] = useState([{ id: uid(), prompt: "" }]);
   const [error, setError] = useState("");
+  const [confirmState, setConfirmState] = useState(null); // { payload, incompleteCount, keptCount } | null
 
   const updateP1 = (i, patch) => setPart1(arr => arr.map((it, idx) => idx === i ? { ...it, ...patch } : it));
   const updateP2 = (i, patch) => setPart2(arr => arr.map((it, idx) => idx === i ? { ...it, ...patch } : it));
   const updateP3 = (patch) => setPart3([{ ...part3[0], ...patch }]);
 
+  const activeParts = scope === "full" ? ["part1", "part2", "part3"] : [singlePart];
+
+  const isP1Filled = (q) => !!(q.image && q.word1.trim() && q.word2.trim());
+  const isP2Filled = (q) => !!q.prompt.trim();
+  const isP3Filled = (q) => !!q.prompt.trim();
+
+  const buildPayload = () => {
+    const filledP1 = activeParts.includes("part1") ? part1.filter(isP1Filled) : [];
+    const filledP2 = activeParts.includes("part2") ? part2.filter(isP2Filled) : [];
+    const filledP3 = activeParts.includes("part3") ? part3.filter(isP3Filled) : [];
+    const totalRows = (activeParts.includes("part1") ? part1.length : 0)
+      + (activeParts.includes("part2") ? part2.length : 0)
+      + (activeParts.includes("part3") ? part3.length : 0);
+    const keptCount = filledP1.length + filledP2.length + filledP3.length;
+    return {
+      payload: { id: uid(), name: name.trim(), createdAt: Date.now(), part1: filledP1, part2: filledP2, part3: filledP3 },
+      incompleteCount: totalRows - keptCount,
+      keptCount
+    };
+  };
+
   const handleSave = () => {
     if (!name.trim()) return setError("Vui lòng đặt tên cho đề.");
-    if (part1.some(q => !q.image || !q.word1.trim() || !q.word2.trim())) return setError("Mỗi câu Phần 1 cần có ảnh và đủ 2 từ bắt buộc.");
-    if (part2.some(q => !q.prompt.trim())) return setError("Mỗi câu Phần 2 cần có đề bài (email yêu cầu).");
-    if (!part3[0].prompt.trim()) return setError("Phần 3 cần có đề luận.");
     setError("");
-    onSave({ id: uid(), name: name.trim(), createdAt: Date.now(), part1, part2, part3 });
+    const { payload, incompleteCount, keptCount } = buildPayload();
+    if (keptCount === 0) return setError("Cần điền ít nhất 1 câu có nội dung để lưu đề.");
+    if (incompleteCount > 0) {
+      setConfirmState({ payload, incompleteCount, keptCount });
+      return;
+    }
+    onSave(payload);
   };
+
+
 
   return (
     <div>
       <button onClick={onCancel} className="flex items-center gap-1 text-sm text-slate-500 mb-4 hover:text-slate-800"><ChevronLeft size={16} /> Quay lại</button>
       <h1 className="text-2xl font-extrabold tracking-tight mb-1">Tạo đề mới</h1>
-      <p className="text-sm text-slate-400 mb-5">Một đề Writing gồm đúng 8 câu: 5 câu mô tả tranh, 2 câu email, 1 bài luận.</p>
+      <p className="text-sm text-slate-400 mb-5">
+        {scope === "full"
+          ? "Đề đầy đủ gồm 5 câu mô tả tranh, 2 câu email, 1 bài luận. Có thể để trống câu nào chưa có nội dung."
+          : `Đề chỉ gồm ${PART_TITLES[singlePart]} (${PART_SUBTITLES[singlePart]}). Có thể để trống câu nào chưa có nội dung.`}
+      </p>
+
+      <div className="flex gap-2 mb-5">
+        <button onClick={() => setScope("full")} className={`flex-1 rounded-xl border px-4 py-3 text-sm font-semibold ${scope === "full" ? "bg-teal-600 text-white border-teal-600" : "bg-white border-slate-200 text-slate-600"}`}>Cả bài</button>
+        <button onClick={() => setScope("single")} className={`flex-1 rounded-xl border px-4 py-3 text-sm font-semibold ${scope === "single" ? "bg-teal-600 text-white border-teal-600" : "bg-white border-slate-200 text-slate-600"}`}>Theo phần</button>
+      </div>
+
+      {scope === "single" && (
+        <div className="grid gap-2 mb-6">
+          {["part1", "part2", "part3"].map(k => (
+            <label key={k} className={`flex items-center gap-3 rounded-xl border px-4 py-3 cursor-pointer ${singlePart === k ? "border-teal-400 bg-teal-50" : "border-slate-200 bg-white"}`}>
+              <input type="radio" name="single-part" checked={singlePart === k} onChange={() => setSinglePart(k)} className="w-4 h-4 accent-teal-600" />
+              <span className="text-sm font-semibold text-slate-700">{PART_TITLES[k]} · {PART_SUBTITLES[k]}</span>
+            </label>
+          ))}
+        </div>
+      )}
 
       <label className="text-xs font-bold uppercase tracking-wide text-slate-400">Tên đề</label>
       <input value={name} onChange={e => setName(e.target.value)} placeholder="VD: Đề luyện tập số 2"
         className="w-full mt-1 mb-6 border border-slate-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-teal-200 focus:border-teal-500" />
 
-      <h2 className="font-bold text-slate-800 mb-3">Phần 1 · Mô tả tranh (5 câu)</h2>
-      <div className="grid gap-4 mb-8">
-        {part1.map((q, i) => (
-          <div key={q.id} className="bg-white border border-slate-200 rounded-2xl p-4 grid md:grid-cols-2 gap-4">
-            <ImageInputBox value={q.image} onChange={(img) => updateP1(i, { image: img })} />
-            <div className="grid gap-2">
-              <span className="text-xs font-bold text-slate-400">Câu {i + 1}</span>
-              <input value={q.word1} onChange={e => updateP1(i, { word1: e.target.value })} placeholder="Từ bắt buộc #1"
-                className="border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-teal-200" />
-              <input value={q.word2} onChange={e => updateP1(i, { word2: e.target.value })} placeholder="Từ bắt buộc #2"
-                className="border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-teal-200" />
-            </div>
+      {activeParts.includes("part1") && (
+        <>
+          <h2 className="font-bold text-slate-800 mb-3">Phần 1 · Mô tả tranh (5 câu)</h2>
+          <div className="grid gap-4 mb-8">
+            {part1.map((q, i) => (
+              <div key={q.id} className="bg-white border border-slate-200 rounded-2xl p-4 grid md:grid-cols-2 gap-4">
+                <ImageInputBox value={q.image} onChange={(img) => updateP1(i, { image: img })} />
+                <div className="grid gap-2">
+                  <span className="text-xs font-bold text-slate-400">Câu {i + 1}</span>
+                  <input value={q.word1} onChange={e => updateP1(i, { word1: e.target.value })} placeholder="Từ bắt buộc #1"
+                    className="border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-teal-200" />
+                  <input value={q.word2} onChange={e => updateP1(i, { word2: e.target.value })} placeholder="Từ bắt buộc #2"
+                    className="border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-teal-200" />
+                </div>
+              </div>
+            ))}
           </div>
-        ))}
-      </div>
+        </>
+      )}
 
-      <h2 className="font-bold text-slate-800 mb-3">Phần 2 · Trả lời email (2 câu)</h2>
-      <div className="grid gap-4 mb-8">
-        {part2.map((q, i) => (
-          <div key={q.id} className="bg-white border border-slate-200 rounded-2xl p-4">
-            <span className="text-xs font-bold text-slate-400">Câu {6 + i}</span>
-            <textarea value={q.prompt} onChange={e => updateP2(i, { prompt: e.target.value })}
-              placeholder="Dán nội dung email đề bài + các yêu cầu cần phản hồi" rows={5}
+      {activeParts.includes("part2") && (
+        <>
+          <h2 className="font-bold text-slate-800 mb-3">Phần 2 · Trả lời email (2 câu)</h2>
+          <div className="grid gap-4 mb-8">
+            {part2.map((q, i) => (
+              <div key={q.id} className="bg-white border border-slate-200 rounded-2xl p-4">
+                <span className="text-xs font-bold text-slate-400">Câu {6 + i}</span>
+                <textarea value={q.prompt} onChange={e => updateP2(i, { prompt: e.target.value })}
+                  placeholder="Dán nội dung email đề bài + các yêu cầu cần phản hồi" rows={5}
+                  className="w-full mt-2 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-teal-200" />
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+
+      {activeParts.includes("part3") && (
+        <>
+          <h2 className="font-bold text-slate-800 mb-3">Phần 3 · Bài luận (1 câu)</h2>
+          <div className="bg-white border border-slate-200 rounded-2xl p-4 mb-8">
+            <span className="text-xs font-bold text-slate-400">Câu 8</span>
+            <textarea value={part3[0].prompt} onChange={e => updateP3({ prompt: e.target.value })}
+              placeholder="Dán đề luận (opinion essay prompt)" rows={4}
               className="w-full mt-2 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-teal-200" />
           </div>
-        ))}
-      </div>
-
-      <h2 className="font-bold text-slate-800 mb-3">Phần 3 · Bài luận (1 câu)</h2>
-      <div className="bg-white border border-slate-200 rounded-2xl p-4 mb-8">
-        <span className="text-xs font-bold text-slate-400">Câu 8</span>
-        <textarea value={part3[0].prompt} onChange={e => updateP3({ prompt: e.target.value })}
-          placeholder="Dán đề luận (opinion essay prompt)" rows={4}
-          className="w-full mt-2 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-teal-200" />
-      </div>
+        </>
+      )}
 
       {error && <p className="text-sm text-rose-600 mb-3">{error}</p>}
       <button onClick={handleSave} className="block mx-auto bg-teal-600 hover:bg-teal-700 text-white font-bold px-8 py-3 rounded-full">Lưu đề</button>
+
+      {confirmState && (
+        <ConfirmModal
+          title="Còn câu chưa điền đủ thông tin"
+          message={`Có ${confirmState.incompleteCount} câu chưa điền đủ thông tin — những câu này sẽ KHÔNG được lưu. Đề sẽ được lưu với ${confirmState.keptCount} câu đã hoàn thành. Tiếp tục?`}
+          onCancel={() => setConfirmState(null)}
+          onConfirm={() => { onSave(confirmState.payload); setConfirmState(null); }}
+        />
+      )}
     </div>
   );
 }
 
 function SetupView({ test, onBack, onStart }) {
+  const availableParts = ["part1", "part2", "part3"].filter(k => (test[k] || []).length > 0);
+  const totalQuestions = availableParts.reduce((s, k) => s + test[k].length, 0);
+  const isSinglePart = availableParts.length <= 1;
+
   const [mode, setMode] = useState("full");
-  const [parts, setParts] = useState({ part1: true, part2: true, part3: true });
+  const [parts, setParts] = useState(() => Object.fromEntries(availableParts.map(k => [k, true])));
   const [times, setTimes] = useState({ ...PART_DEFAULT_MIN });
 
   const togglePart = (k) => setParts(p => ({ ...p, [k]: !p[k] }));
-  const selected = mode === "full" ? { part1: true, part2: true, part3: true } : parts;
+  const selected = isSinglePart || mode === "full"
+    ? Object.fromEntries(availableParts.map(k => [k, true]))
+    : parts;
   const anySelected = Object.values(selected).some(Boolean);
 
   return (
@@ -539,14 +635,16 @@ function SetupView({ test, onBack, onStart }) {
       <h1 className="text-2xl font-extrabold tracking-tight mb-1">{test.name}</h1>
       <p className="text-sm text-slate-400 mb-6">Chọn phạm vi và thời gian làm bài trước khi bắt đầu.</p>
 
-      <div className="flex gap-2 mb-5">
-        <button onClick={() => setMode("full")} className={`flex-1 rounded-xl border px-4 py-3 text-sm font-semibold ${mode === "full" ? "bg-teal-600 text-white border-teal-600" : "bg-white border-slate-200 text-slate-600"}`}>Làm full bài (8 câu)</button>
-        <button onClick={() => setMode("partial")} className={`flex-1 rounded-xl border px-4 py-3 text-sm font-semibold ${mode === "partial" ? "bg-teal-600 text-white border-teal-600" : "bg-white border-slate-200 text-slate-600"}`}>Chọn từng phần</button>
-      </div>
+      {!isSinglePart && (
+        <div className="flex gap-2 mb-5">
+          <button onClick={() => setMode("full")} className={`flex-1 rounded-xl border px-4 py-3 text-sm font-semibold ${mode === "full" ? "bg-teal-600 text-white border-teal-600" : "bg-white border-slate-200 text-slate-600"}`}>Làm full bài ({totalQuestions} câu)</button>
+          <button onClick={() => setMode("partial")} className={`flex-1 rounded-xl border px-4 py-3 text-sm font-semibold ${mode === "partial" ? "bg-teal-600 text-white border-teal-600" : "bg-white border-slate-200 text-slate-600"}`}>Chọn từng phần</button>
+        </div>
+      )}
 
-      {mode === "partial" && (
+      {!isSinglePart && mode === "partial" && (
         <div className="grid gap-2 mb-5">
-          {["part1", "part2", "part3"].map(k => (
+          {availableParts.map(k => (
             <label key={k} className={`flex items-center gap-3 rounded-xl border px-4 py-3 cursor-pointer ${parts[k] ? "border-teal-400 bg-teal-50" : "border-slate-200 bg-white"}`}>
               <input type="checkbox" checked={parts[k]} onChange={() => togglePart(k)} className="w-4 h-4 accent-teal-600" />
               <span className="text-sm font-semibold text-slate-700">{PART_TITLES[k]} · {PART_SUBTITLES[k]}</span>
@@ -556,7 +654,7 @@ function SetupView({ test, onBack, onStart }) {
       )}
 
       <div className="grid gap-3 mb-8">
-        {["part1", "part2", "part3"].filter(k => selected[k]).map(k => (
+        {availableParts.filter(k => selected[k]).map(k => (
           <div key={k} className="flex items-center justify-between bg-white border border-slate-200 rounded-xl px-4 py-3">
             <span className="text-sm text-slate-600">{PART_TITLES[k]} — thời gian (phút)</span>
             <input type="number" min={1} value={times[k]} onChange={e => setTimes(t => ({ ...t, [k]: Math.max(1, parseInt(e.target.value) || 1) }))}
@@ -766,7 +864,10 @@ export default function ToeicApp() {
         // empty (confirmed by a successful read) — never as a fallback for a
         // failed read, since that would overwrite any real saved data.
         const seed = await buildSeedTest();
-        const newIdx = [{ id: seed.id, name: seed.name, createdAt: seed.createdAt }];
+        const newIdx = [{
+          id: seed.id, name: seed.name, createdAt: seed.createdAt,
+          counts: { part1: seed.part1.length, part2: seed.part2.length, part3: seed.part3.length }
+        }];
         setTestsCache({ [seed.id]: seed });
         setTestsIndex(newIdx);
         saveTest(seed);
@@ -791,7 +892,10 @@ export default function ToeicApp() {
   const handleOpenEditor = () => setView("editor");
   const handleSaveTest = async (test) => {
     setTestsCache(c => ({ ...c, [test.id]: test })); // available immediately, no storage round-trip needed
-    const idx = [...testsIndex, { id: test.id, name: test.name, createdAt: test.createdAt }];
+    const idx = [...testsIndex, {
+      id: test.id, name: test.name, createdAt: test.createdAt,
+      counts: { part1: test.part1.length, part2: test.part2.length, part3: test.part3.length }
+    }];
     setTestsIndex(idx);
     saveTest(test);
     saveTestsIndex(idx);
@@ -836,6 +940,11 @@ export default function ToeicApp() {
         results.push({ id: q.id, partKey, globalNum, answer: "", graded: null });
         continue;
       }
+      // Small pacing gap between questions (skip before the very first one). This spreads
+      // a full test's requests out instead of firing them back-to-back, which both eases
+      // pressure on the free-tier per-minute quota and makes a transient 503 less likely
+      // to begin with.
+      if (i > 0) await new Promise(r => setTimeout(r, 1200));
       try {
         const graded = await gradeQuestion(partKey, q, answerText);
         results.push({ id: q.id, partKey, globalNum, answer: answerText, graded });
